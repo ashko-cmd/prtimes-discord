@@ -1,0 +1,21 @@
+{
+  "name": "prtimes-discord-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PR TIMESの商品発売関連プレスリリースをDiscordへ通知する低頻度モニター",
+  "scripts": {
+    "start": "node src/index.js",
+    "once": "node src/index.js --once",
+    "dry-run": "node src/index.js --once --dry-run",
+    "seed": "node src/index.js --once --seed",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "fast-xml-parser": "^5.2.5"
+  }
+}
