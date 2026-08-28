@@ -1,0 +1,133 @@
+name: PR TIMES Discord monitor
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prtimes-discord-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+
+    steps:
+      - name: Check out main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore notification state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          if git fetch --no-tags origin refs/heads/state:refs/remotes/origin/state; then
+            git show refs/remotes/origin/state:notified.json > data/notified.json
+            node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const state = JSON.parse(await readFile('data/notified.json', 'utf8'));
+          if (!Array.isArray(state) || state.some((url) => typeof url !== 'string')) {
+            throw new Error('stateブランチのnotified.jsonが不正です。');
+          }
+          console.log(`通知履歴を${state.length}件復元しました。`);
+          NODE
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "base=$(git rev-parse refs/remotes/origin/state)" >> "$GITHUB_OUTPUT"
+          else
+            echo 'stateブランチがないため、初回は通知せず現在の記事を既読登録します。'
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "base=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Monitor PR TIMES
+        id: monitor
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          POLL_INTERVAL_MINUTES: '10'
+          SKIP_EXISTING_ON_FIRST_RUN: 'true'
+        run: |
+          if [ "${{ steps.state.outputs.exists }}" = "true" ]; then
+            npm run once
+          else
+            npm run seed
+          fi
+
+      - name: Save notification state
+        if: always()
+        shell: bash
+        env:
+          STATE_EXISTED: ${{ steps.state.outputs.exists }}
+          STATE_BASE: ${{ steps.state.outputs.base }}
+        run: |
+          set -euo pipefail
+          test -f data/notified.json || {
+            echo '保存する通知履歴がありません。監視ログを確認してください。' >&2
+            exit 1
+          }
+
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const state = JSON.parse(await readFile('data/notified.json', 'utf8'));
+          if (!Array.isArray(state) || state.some((url) => typeof url !== 'string')) {
+            throw new Error('保存しようとした通知履歴が不正です。');
+          }
+          const normalized = [...new Set(state)].sort();
+          await writeFile('data/notified.json', `${JSON.stringify(normalized, null, 2)}\n`);
+          console.log(`通知履歴${normalized.length}件を保存します。`);
+          NODE
+
+          git fetch --no-tags origin '+refs/heads/state:refs/remotes/origin/state' || true
+          latest=''
+          if git show-ref --verify --quiet refs/remotes/origin/state; then
+            latest=$(git rev-parse refs/remotes/origin/state)
+          fi
+          if [ "$STATE_EXISTED" = 'true' ] && [ "$latest" != "$STATE_BASE" ]; then
+            echo '実行中にstateブランチが更新されたため、安全のため保存を中止します。' >&2
+            exit 1
+          fi
+          if [ "$STATE_EXISTED" = 'false' ] && [ -n "$latest" ]; then
+            echo '実行中にstateブランチが作成されたため、安全のため保存を中止します。' >&2
+            exit 1
+          fi
+
+          blob=$(git hash-object -w data/notified.json)
+          if [ -n "$latest" ]; then
+            old_blob=$(git rev-parse "refs/remotes/origin/state:notified.json")
+            if [ "$blob" = "$old_blob" ]; then
+              echo '通知履歴に変更はありません。'
+              exit 0
+            fi
+          fi
+          tree=$(printf '100644 blob %s\tnotified.json\n' "$blob" | git mktree)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ -n "$latest" ]; then
+            commit=$(printf 'Update notification state\n' | git commit-tree "$tree" -p "$latest")
+          else
+            commit=$(printf 'Initialize notification state\n' | git commit-tree "$tree")
+          fi
+          git push origin "$commit:refs/heads/state"
+
+      - name: Report monitor failure
+        if: steps.monitor.outcome != 'success'
+        run: |
+          echo 'PR TIMESの監視に失敗しました。Monitor PR TIMESステップのログを確認してください。' >&2
+          exit 1

@@ -66,3 +66,20 @@ npm run seed
 - 販売停止・販売終了・廃番: 販売終了、販売停止、販売中止、生産終了、製造終了、廃番、廃止、終売
 
 複数カテゴリーの語がある場合は、上記の先頭カテゴリーを採用し、一致した語を通知内に併記します。
+
+## GitHub Actionsでの常時監視
+
+`.github/workflows/monitor.yml` は10分ごと、または手動実行でモニターを1回起動します。GitHubリポジトリの `Settings` → `Secrets and variables` → `Actions` で、Repository Secret `DISCORD_WEBHOOK_URL` にDiscord Webhook URLを設定してください。Webhook URLをファイルへ保存する必要はありません。
+
+通知済みURLは公開コードとは別の `state` ブランチに `notified.json` だけを保存します。各実行はstateを復元してから監視し、通知成功のたびに更新された履歴を実行後に保存します。Actionsの `concurrency` により同時実行を直列化し、さらに保存直前にもstateが実行中に変更されていないことを確認します。競合時は上書きせず失敗するため、履歴を壊しません。
+
+PCで蓄積した `data/notified.json` を初回クラウド実行前に引き継ぐ場合は、先に次を実行します。このスクリプトは履歴の内容を表示せず、`origin` がこのプロジェクトのGitHub URLであることと、既存のstateブランチがないことを確認してから、履歴だけをstateブランチへpushします。まず `-WhatIf` で対象を確認できます。
+
+```powershell
+.\scripts\initialize-state-branch.ps1 -WhatIf
+.\scripts\initialize-state-branch.ps1
+```
+
+stateを事前作成しなかった場合、最初のActions実行は現在取得できる記事を通知せず既読登録し、過去記事の大量通知を防ぎます。2回目以降は新着だけを通知します。
+
+失敗理由はActionsの各ステップに時刻付きで記録されます。途中まで通知に成功した後で失敗した場合も、その時点の通知履歴を先にstateへ保存してからジョブを失敗扱いにするため、次回の重複通知を抑えます。
