@@ -4,6 +4,7 @@ import path from 'node:path';
 const DATA_DIR = path.resolve('data');
 const NOTIFIED_FILE = path.join(DATA_DIR, 'notified.json');
 const CACHE_FILE = path.join(DATA_DIR, 'http-cache.json');
+const INSPECTED_FILE = path.join(DATA_DIR, 'inspected.json');
 const SNAPSHOT_FILES = {
   'news-sitemap': path.join(DATA_DIR, 'last-good-news-sitemap.xml'),
   rss: path.join(DATA_DIR, 'last-good-rss.xml'),
@@ -29,6 +30,8 @@ export const loadNotified = async () => new Set(await readJson(NOTIFIED_FILE, []
 export const saveNotified = async (set) => writeJsonAtomic(NOTIFIED_FILE, [...set]);
 export const loadHttpCache = async () => readJson(CACHE_FILE, {});
 export const saveHttpCache = async (cache) => writeJsonAtomic(CACHE_FILE, cache);
+export const loadInspected = async () => new Set(await readJson(INSPECTED_FILE, []));
+export const saveInspected = async (set) => writeJsonAtomic(INSPECTED_FILE, [...set]);
 
 export async function loadSnapshot(sourceName) {
   const file = SNAPSHOT_FILES[sourceName];

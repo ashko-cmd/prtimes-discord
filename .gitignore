@@ -2,6 +2,7 @@ node_modules/
 .env
 data/notified.json
 data/http-cache.json
+data/inspected.json
 data/last-good-*.xml
 npm-debug.log*
 data/*.log

@@ -1,7 +1,8 @@
-import { classifyTitle } from './classifier.js';
+import { classifyArticle, classifyTitle } from './classifier.js';
+import { extractArticleContent } from './article-content.js';
 import { mergeArticles, parseSource } from './parser.js';
 import { SOURCES } from './config.js';
-import { loadHttpCache, loadNotified, loadSnapshot, saveHttpCache, saveNotified, saveSnapshot } from './storage.js';
+import { loadHttpCache, loadInspected, loadNotified, loadSnapshot, saveHttpCache, saveInspected, saveNotified, saveSnapshot } from './storage.js';
 
 const log = (level, message, details = '') => {
   const suffix = details ? ` | ${details}` : '';
@@ -69,6 +70,19 @@ async function fetchSource(source, config, cache) {
   throw lastError;
 }
 
+async function fetchArticleContent(article, config) {
+  const response = await fetch(article.url, {
+    headers: { 'User-Agent': config.userAgent, Accept: 'text/html,*/*;q=0.1' },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw new Error(`記事詳細: HTTP ${response.status} ${response.statusText}`);
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!/^text\/html\b/i.test(contentType)) {
+    throw new Error(`記事詳細: 想定外のContent-Typeです (${contentType || 'なし'})。`);
+  }
+  return extractArticleContent(await response.text());
+}
+
 async function sendDiscord(article, category, webhookUrl, dryRun) {
   if (dryRun) {
     log('info', `[DRY RUN] ${category.name}`, `${article.title} | ${article.url}`);
@@ -99,6 +113,7 @@ async function sendDiscord(article, category, webhookUrl, dryRun) {
 
 export async function runOnce(config, { dryRun = false, seed = false } = {}) {
   const notified = await loadNotified();
+  const inspected = await loadInspected();
   const firstRun = notified.size === 0;
   const cache = firstRun || seed ? {} : await loadHttpCache();
   const groups = [];
@@ -133,10 +148,23 @@ export async function runOnce(config, { dryRun = false, seed = false } = {}) {
   }
 
   let sent = 0;
+  const currentUrls = new Set(articles.map((article) => article.url));
+  for (const url of inspected) if (!currentUrls.has(url)) inspected.delete(url);
   for (const article of articles) {
     if (notified.has(article.url)) continue;
-    const category = classifyTitle(article.title);
-    if (!category) continue;
+    if (inspected.has(article.url)) continue;
+    let category = classifyTitle(article.title);
+    try {
+      Object.assign(article, await fetchArticleContent(article, config));
+      category = classifyArticle(article);
+    } catch (error) {
+      log('warn', '記事詳細の取得/解析に失敗', `${article.url} | ${error.message}`);
+      if (!category) continue;
+    }
+    if (!category) {
+      if (!dryRun) inspected.add(article.url);
+      continue;
+    }
     try {
       await sendDiscord(article, category, config.webhookUrl, dryRun);
       sent += 1;
@@ -148,5 +176,6 @@ export async function runOnce(config, { dryRun = false, seed = false } = {}) {
       log('error', 'Discord通知に失敗（次回再試行します）', `${article.url} | ${error.stack ?? error.message}`);
     }
   }
+  if (!dryRun) await saveInspected(inspected);
   log('info', `判定完了: ${articles.length}件中 ${sent}件${dryRun ? '検出' : '通知'}`);
 }

@@ -41,13 +41,18 @@ jobs:
           mkdir -p data
           if git fetch --no-tags origin refs/heads/state:refs/remotes/origin/state; then
             git show refs/remotes/origin/state:notified.json > data/notified.json
+            git show refs/remotes/origin/state:inspected.json > data/inspected.json 2>/dev/null || printf '[]\n' > data/inspected.json
             node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
           const state = JSON.parse(await readFile('data/notified.json', 'utf8'));
           if (!Array.isArray(state) || state.some((url) => typeof url !== 'string')) {
             throw new Error('stateブランチのnotified.jsonが不正です。');
           }
-          console.log(`通知履歴を${state.length}件復元しました。`);
+          const inspected = JSON.parse(await readFile('data/inspected.json', 'utf8'));
+          if (!Array.isArray(inspected) || inspected.some((url) => typeof url !== 'string')) {
+            throw new Error('stateブランチのinspected.jsonが不正です。');
+          }
+          console.log(`通知履歴を${state.length}件、詳細確認キャッシュを${inspected.length}件復元しました。`);
           NODE
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "base=$(git rev-parse refs/remotes/origin/state)" >> "$GITHUB_OUTPUT"
@@ -92,7 +97,15 @@ jobs:
           }
           const normalized = [...new Set(state)].sort();
           await writeFile('data/notified.json', `${JSON.stringify(normalized, null, 2)}\n`);
-          console.log(`通知履歴${normalized.length}件を保存します。`);
+          let inspected = [];
+          try { inspected = JSON.parse(await readFile('data/inspected.json', 'utf8')); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+          if (!Array.isArray(inspected) || inspected.some((url) => typeof url !== 'string')) {
+            throw new Error('保存しようとした詳細確認キャッシュが不正です。');
+          }
+          const normalizedInspected = [...new Set(inspected)].sort();
+          await writeFile('data/inspected.json', `${JSON.stringify(normalizedInspected, null, 2)}\n`);
+          console.log(`通知履歴${normalized.length}件、詳細確認キャッシュ${normalizedInspected.length}件を保存します。`);
           NODE
 
           git fetch --no-tags origin '+refs/heads/state:refs/remotes/origin/state' || true
@@ -110,14 +123,16 @@ jobs:
           fi
 
           blob=$(git hash-object -w data/notified.json)
+          inspected_blob=$(git hash-object -w data/inspected.json)
           if [ -n "$latest" ]; then
             old_blob=$(git rev-parse "refs/remotes/origin/state:notified.json")
-            if [ "$blob" = "$old_blob" ]; then
+            old_inspected_blob=$(git rev-parse "refs/remotes/origin/state:inspected.json" 2>/dev/null || true)
+            if [ "$blob" = "$old_blob" ] && [ "$inspected_blob" = "$old_inspected_blob" ]; then
               echo '通知履歴に変更はありません。'
               exit 0
             fi
           fi
-          tree=$(printf '100644 blob %s\tnotified.json\n' "$blob" | git mktree)
+          tree=$(printf '100644 blob %s\tinspected.json\n100644 blob %s\tnotified.json\n' "$inspected_blob" "$blob" | git mktree)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if [ -n "$latest" ]; then
